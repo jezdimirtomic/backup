@@ -1,350 +1,499 @@
 """
-Backup GUI - Modern CustomTkinter interface
+Backup GUI - Modern CustomTkinter interface (Srpski jezik)
 """
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import threading
+import json
+import os
 from backup_engine import BackupEngine
 from scheduler import BackupScheduler
-import os
+
+SETTINGS_FILE = "podesavanja.json"
+
+
+def ucitaj_podesavanja():
+    """Ucitaj poslednja podesavanja iz fajla"""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def sacuvaj_podesavanja(data: dict):
+    """Sacuvaj podesavanja u fajl"""
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Greska pri cuvanju podesavanja: {e}")
 
 
 class BackupGUI:
     def __init__(self):
-        # Initialize main window
         self.root = ctk.CTk()
-        self.root.title("Advanced Backup Tool")
-        self.root.geometry("900x700")
+        self.root.title("Alat za Backup Podataka")
+        self.root.geometry("920x780")
 
-        # Set theme
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        # Initialize backend
-        self.backup_engine = BackupEngine(progress_callback=self.update_progress)
+        self.backup_engine = BackupEngine(progress_callback=self.azuriraj_progres)
         self.scheduler = BackupScheduler(self.backup_engine)
         self.backup_thread = None
 
-        # Variables
-        self.source_dir = ctk.StringVar()
-        self.dest_dir = ctk.StringVar()
-        self.include_ext = ctk.StringVar()
-        self.exclude_ext = ctk.StringVar()
-        self.schedule_enabled = ctk.BooleanVar(value=False)
-        self.schedule_type = ctk.StringVar(value="daily")
-        self.schedule_time = ctk.StringVar(value="12:00")
+        # Varijable
+        self.izvorni_folder = ctk.StringVar()
+        self.odredisni_folder = ctk.StringVar()
+        self.ukljuci_ext = ctk.StringVar()
+        self.iskljuci_ext = ctk.StringVar()
+        self.raspored_ukljucen = ctk.BooleanVar(value=False)
+        self.tip_rasporeda = ctk.StringVar(value="dnevno")
+        self.vreme_rasporeda = ctk.StringVar(value="12:00")
 
-        # Build UI
-        self.create_widgets()
+        # Ucitaj poslednja podesavanja
+        self.ucitaj_prethodna_podesavanja()
 
-        # Start scheduler checker
-        self.check_scheduler()
+        self.kreiraj_widgete()
+        self.provjeri_raspored()
 
-    def create_widgets(self):
-        """Create all GUI components"""
-        # Main container
-        main_frame = ctk.CTkFrame(self.root)
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+    def ucitaj_prethodna_podesavanja(self):
+        """Ucitaj podesavanja i popuni varijable"""
+        p = ucitaj_podesavanja()
+        if p.get("izvorni_folder"):
+            self.izvorni_folder.set(p["izvorni_folder"])
+        if p.get("odredisni_folder"):
+            self.odredisni_folder.set(p["odredisni_folder"])
+        if p.get("ukljuci_ext"):
+            self.ukljuci_ext.set(p["ukljuci_ext"])
+        if p.get("iskljuci_ext"):
+            self.iskljuci_ext.set(p["iskljuci_ext"])
+        if p.get("tip_rasporeda"):
+            self.tip_rasporeda.set(p["tip_rasporeda"])
+        if p.get("vreme_rasporeda"):
+            self.vreme_rasporeda.set(p["vreme_rasporeda"])
+        if p.get("raspored_ukljucen") is not None:
+            self.raspored_ukljucen.set(p["raspored_ukljucen"])
 
-        # Title
-        title_label = ctk.CTkLabel(
-            main_frame,
-            text="🗄️ Advanced Backup Tool",
-            font=ctk.CTkFont(size=24, weight="bold")
-        )
-        title_label.pack(pady=(0, 20))
+    def sacuvaj_trenutna_podesavanja(self):
+        """Sacuvaj trenutna podesavanja"""
+        sacuvaj_podesavanja({
+            "izvorni_folder": self.izvorni_folder.get(),
+            "odredisni_folder": self.odredisni_folder.get(),
+            "ukljuci_ext": self.ukljuci_ext.get(),
+            "iskljuci_ext": self.iskljuci_ext.get(),
+            "tip_rasporeda": self.tip_rasporeda.get(),
+            "vreme_rasporeda": self.vreme_rasporeda.get(),
+            "raspored_ukljucen": self.raspored_ukljucen.get(),
+        })
 
-        # Source Directory Section
-        source_frame = ctk.CTkFrame(main_frame)
-        source_frame.pack(fill="x", pady=5)
+    def kreiraj_widgete(self):
+        """Kreiraj sve GUI komponente"""
+        # Tabovi
+        self.tabovi = ctk.CTkTabview(self.root)
+        self.tabovi.pack(fill="both", expand=True, padx=20, pady=20)
 
-        ctk.CTkLabel(source_frame, text="Source Directory:", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
+        self.tabovi.add("💾  Backup")
+        self.tabovi.add("🔄  Restore")
 
-        source_input_frame = ctk.CTkFrame(source_frame)
-        source_input_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.kreiraj_tab_backup(self.tabovi.tab("💾  Backup"))
+        self.kreiraj_tab_restore(self.tabovi.tab("🔄  Restore"))
 
-        source_entry = ctk.CTkEntry(source_input_frame, textvariable=self.source_dir, width=500)
-        source_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+    # ─────────────────────────────────────────────
+    #  TAB: BACKUP
+    # ─────────────────────────────────────────────
+    def kreiraj_tab_backup(self, tab):
+        # Naslov
+        ctk.CTkLabel(
+            tab,
+            text="Alat za Backup Podataka",
+            font=ctk.CTkFont(size=22, weight="bold")
+        ).pack(pady=(10, 16))
 
-        ctk.CTkButton(source_input_frame, text="Browse", command=self.browse_source, width=100).pack(side="left")
+        # Izvorni folder
+        okvir_izvor = ctk.CTkFrame(tab)
+        okvir_izvor.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_izvor, text="Izvorni folder:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        red_izvor = ctk.CTkFrame(okvir_izvor)
+        red_izvor.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkEntry(red_izvor, textvariable=self.izvorni_folder).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(red_izvor, text="Pregledaj", command=self.odaberi_izvor, width=100).pack(side="left")
 
-        # Destination Directory Section
-        dest_frame = ctk.CTkFrame(main_frame)
-        dest_frame.pack(fill="x", pady=5)
+        # Odredisni folder
+        okvir_odrediste = ctk.CTkFrame(tab)
+        okvir_odrediste.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_odrediste, text="Odredišni folder:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        red_odrediste = ctk.CTkFrame(okvir_odrediste)
+        red_odrediste.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkEntry(red_odrediste, textvariable=self.odredisni_folder).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(red_odrediste, text="Pregledaj", command=self.odaberi_odrediste, width=100).pack(side="left")
 
-        ctk.CTkLabel(dest_frame, text="Destination Directory:", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
+        # Filteri
+        okvir_filteri = ctk.CTkFrame(tab)
+        okvir_filteri.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_filteri, text="Filteri fajlova:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
 
-        dest_input_frame = ctk.CTkFrame(dest_frame)
-        dest_input_frame.pack(fill="x", padx=10, pady=(0, 10))
+        red_ukljuci = ctk.CTkFrame(okvir_filteri)
+        red_ukljuci.pack(fill="x", padx=10, pady=3)
+        ctk.CTkLabel(red_ukljuci, text="Uključi ekstenzije:", width=160).pack(side="left")
+        ctk.CTkEntry(red_ukljuci, textvariable=self.ukljuci_ext, placeholder_text=".txt, .pdf, .docx").pack(side="left", fill="x", expand=True)
 
-        dest_entry = ctk.CTkEntry(dest_input_frame, textvariable=self.dest_dir, width=500)
-        dest_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        red_iskljuci = ctk.CTkFrame(okvir_filteri)
+        red_iskljuci.pack(fill="x", padx=10, pady=(3, 8))
+        ctk.CTkLabel(red_iskljuci, text="Isključi ekstenzije:", width=160).pack(side="left")
+        ctk.CTkEntry(red_iskljuci, textvariable=self.iskljuci_ext, placeholder_text=".tmp, .log").pack(side="left", fill="x", expand=True)
 
-        ctk.CTkButton(dest_input_frame, text="Browse", command=self.browse_destination, width=100).pack(side="left")
-
-        # Filter Section
-        filter_frame = ctk.CTkFrame(main_frame)
-        filter_frame.pack(fill="x", pady=5)
-
-        ctk.CTkLabel(filter_frame, text="File Filters:", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
-
-        # Include extensions
-        include_frame = ctk.CTkFrame(filter_frame)
-        include_frame.pack(fill="x", padx=10, pady=5)
-
-        ctk.CTkLabel(include_frame, text="Include Extensions:", width=150).pack(side="left", padx=(0, 5))
-        ctk.CTkEntry(include_frame, textvariable=self.include_ext, placeholder_text=".txt, .pdf, .docx").pack(side="left", fill="x", expand=True)
-
-        # Exclude extensions
-        exclude_frame = ctk.CTkFrame(filter_frame)
-        exclude_frame.pack(fill="x", padx=10, pady=(5, 10))
-
-        ctk.CTkLabel(exclude_frame, text="Exclude Extensions:", width=150).pack(side="left", padx=(0, 5))
-        ctk.CTkEntry(exclude_frame, textvariable=self.exclude_ext, placeholder_text=".tmp, .log").pack(side="left", fill="x", expand=True)
-
-        # Scheduling Section
-        schedule_frame = ctk.CTkFrame(main_frame)
-        schedule_frame.pack(fill="x", pady=5)
-
-        ctk.CTkLabel(schedule_frame, text="Scheduling:", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
-
-        schedule_toggle_frame = ctk.CTkFrame(schedule_frame)
-        schedule_toggle_frame.pack(fill="x", padx=10, pady=5)
+        # Raspored
+        okvir_raspored = ctk.CTkFrame(tab)
+        okvir_raspored.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_raspored, text="Automatsko zakazivanje:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
 
         ctk.CTkCheckBox(
-            schedule_toggle_frame,
-            text="Enable Automatic Backup",
-            variable=self.schedule_enabled,
-            command=self.toggle_schedule
-        ).pack(side="left")
+            okvir_raspored,
+            text="Omogući automatski backup",
+            variable=self.raspored_ukljucen,
+            command=self.toggle_raspored
+        ).pack(anchor="w", padx=10, pady=4)
 
-        self.schedule_config_frame = ctk.CTkFrame(schedule_frame)
-        self.schedule_config_frame.pack(fill="x", padx=10, pady=(5, 10))
+        self.okvir_raspored_config = ctk.CTkFrame(okvir_raspored)
+        self.okvir_raspored_config.pack(fill="x", padx=10, pady=(0, 8))
 
-        ctk.CTkLabel(self.schedule_config_frame, text="Frequency:", width=100).pack(side="left", padx=(0, 5))
+        ctk.CTkLabel(self.okvir_raspored_config, text="Učestalost:", width=90).pack(side="left", padx=(0, 4))
+        ctk.CTkRadioButton(self.okvir_raspored_config, text="Dnevno", variable=self.tip_rasporeda, value="dnevno").pack(side="left", padx=5)
+        ctk.CTkRadioButton(self.okvir_raspored_config, text="Nedeljno", variable=self.tip_rasporeda, value="nedeljno").pack(side="left", padx=5)
+        ctk.CTkRadioButton(self.okvir_raspored_config, text="Mesečno", variable=self.tip_rasporeda, value="mesecno").pack(side="left", padx=5)
+        ctk.CTkLabel(self.okvir_raspored_config, text="Vreme:", width=55).pack(side="left", padx=(16, 4))
+        ctk.CTkEntry(self.okvir_raspored_config, textvariable=self.vreme_rasporeda, width=80, placeholder_text="SS:MM").pack(side="left")
 
-        ctk.CTkRadioButton(
-            self.schedule_config_frame,
-            text="Daily",
-            variable=self.schedule_type,
-            value="daily"
-        ).pack(side="left", padx=5)
+        # Sakrij config ako nije ukljucen
+        if not self.raspored_ukljucen.get():
+            self.okvir_raspored_config.pack_forget()
 
-        ctk.CTkRadioButton(
-            self.schedule_config_frame,
-            text="Weekly",
-            variable=self.schedule_type,
-            value="weekly"
-        ).pack(side="left", padx=5)
+        # Progres
+        okvir_progres = ctk.CTkFrame(tab)
+        okvir_progres.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_progres, text="Napredak:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        self.traka_napretka = ctk.CTkProgressBar(okvir_progres)
+        self.traka_napretka.pack(fill="x", padx=10, pady=4)
+        self.traka_napretka.set(0)
+        self.labela_napretka = ctk.CTkLabel(okvir_progres, text="Spreman za backup", font=ctk.CTkFont(size=12))
+        self.labela_napretka.pack(padx=10, pady=(0, 8))
 
-        ctk.CTkRadioButton(
-            self.schedule_config_frame,
-            text="Monthly",
-            variable=self.schedule_type,
-            value="monthly"
-        ).pack(side="left", padx=5)
-
-        ctk.CTkLabel(self.schedule_config_frame, text="Time:", width=50).pack(side="left", padx=(20, 5))
-        ctk.CTkEntry(self.schedule_config_frame, textvariable=self.schedule_time, width=80, placeholder_text="HH:MM").pack(side="left")
-
-        self.schedule_config_frame.pack_forget()  # Hidden by default
-
-        # Progress Section
-        progress_frame = ctk.CTkFrame(main_frame)
-        progress_frame.pack(fill="x", pady=5)
-
-        ctk.CTkLabel(progress_frame, text="Progress:", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
-
-        self.progress_bar = ctk.CTkProgressBar(progress_frame, width=800)
-        self.progress_bar.pack(padx=10, pady=5)
-        self.progress_bar.set(0)
-
-        self.progress_label = ctk.CTkLabel(progress_frame, text="Ready to backup", font=ctk.CTkFont(size=12))
-        self.progress_label.pack(padx=10, pady=(0, 10))
-
-        # Action Buttons
-        button_frame = ctk.CTkFrame(main_frame)
-        button_frame.pack(fill="x", pady=10)
-
-        self.backup_button = ctk.CTkButton(
-            button_frame,
-            text="Start Backup",
-            command=self.start_backup,
-            width=200,
-            height=40,
+        # Dugmici
+        okvir_dugmici = ctk.CTkFrame(tab)
+        okvir_dugmici.pack(fill="x", pady=6)
+        self.dugme_backup = ctk.CTkButton(
+            okvir_dugmici, text="▶  Pokreni Backup",
+            command=self.pokreni_backup,
+            width=200, height=40,
             font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.backup_button.pack(side="left", padx=(10, 5))
-
-        self.cancel_button = ctk.CTkButton(
-            button_frame,
-            text="Cancel",
-            command=self.cancel_backup,
-            width=200,
-            height=40,
+        self.dugme_backup.pack(side="left", padx=(10, 5))
+        self.dugme_otkazivanje = ctk.CTkButton(
+            okvir_dugmici, text="✖  Otkaži",
+            command=self.otkazivanje_backup,
+            width=150, height=40,
             font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="red",
-            hover_color="darkred",
+            fg_color="#c0392b", hover_color="#922b21",
             state="disabled"
         )
-        self.cancel_button.pack(side="left", padx=5)
+        self.dugme_otkazivanje.pack(side="left", padx=5)
 
-        # Log/Status Section
-        log_frame = ctk.CTkFrame(main_frame)
-        log_frame.pack(fill="both", expand=True, pady=5)
+        # Log
+        okvir_log = ctk.CTkFrame(tab)
+        okvir_log.pack(fill="both", expand=True, pady=4)
+        ctk.CTkLabel(okvir_log, text="Dnevnik aktivnosti:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        self.tekst_log = ctk.CTkTextbox(okvir_log, height=130)
+        self.tekst_log.pack(padx=10, pady=(0, 10), fill="both", expand=True)
 
-        ctk.CTkLabel(log_frame, text="Status Log:", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
+    # ─────────────────────────────────────────────
+    #  TAB: RESTORE
+    # ─────────────────────────────────────────────
+    def kreiraj_tab_restore(self, tab):
+        ctk.CTkLabel(
+            tab,
+            text="Obnavljanje Podataka (Restore)",
+            font=ctk.CTkFont(size=22, weight="bold")
+        ).pack(pady=(10, 16))
 
-        self.log_text = ctk.CTkTextbox(log_frame, width=800, height=150)
-        self.log_text.pack(padx=10, pady=(0, 10), fill="both", expand=True)
+        # Folder backup-a (izvor za restore)
+        okvir_backup_folder = ctk.CTkFrame(tab)
+        okvir_backup_folder.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_backup_folder, text="Folder sa backup-om:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        red = ctk.CTkFrame(okvir_backup_folder)
+        red.pack(fill="x", padx=10, pady=(0, 8))
+        self.restore_izvor = ctk.StringVar()
+        ctk.CTkEntry(red, textvariable=self.restore_izvor).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(red, text="Pregledaj", command=self.odaberi_restore_izvor, width=100).pack(side="left")
 
-    def toggle_schedule(self):
-        """Toggle schedule configuration visibility"""
-        if self.schedule_enabled.get():
-            self.schedule_config_frame.pack(fill="x", padx=10, pady=(5, 10))
+        # Folder za obnavljanje (odrediste)
+        okvir_restore_odrediste = ctk.CTkFrame(tab)
+        okvir_restore_odrediste.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_restore_odrediste, text="Obnovi u folder:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        red2 = ctk.CTkFrame(okvir_restore_odrediste)
+        red2.pack(fill="x", padx=10, pady=(0, 8))
+        self.restore_odrediste = ctk.StringVar()
+        ctk.CTkEntry(red2, textvariable=self.restore_odrediste).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(red2, text="Pregledaj", command=self.odaberi_restore_odrediste, width=100).pack(side="left")
+
+        # Opcije
+        okvir_opcije = ctk.CTkFrame(tab)
+        okvir_opcije.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_opcije, text="Opcije obnavljanja:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        self.prepisati_postojece = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            okvir_opcije,
+            text="Prepiši postojeće fajlove",
+            variable=self.prepisati_postojece
+        ).pack(anchor="w", padx=10, pady=(0, 8))
+
+        # Progres restore
+        okvir_progres_r = ctk.CTkFrame(tab)
+        okvir_progres_r.pack(fill="x", pady=4)
+        ctk.CTkLabel(okvir_progres_r, text="Napredak:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        self.traka_restore = ctk.CTkProgressBar(okvir_progres_r)
+        self.traka_restore.pack(fill="x", padx=10, pady=4)
+        self.traka_restore.set(0)
+        self.labela_restore = ctk.CTkLabel(okvir_progres_r, text="Spreman za obnavljanje", font=ctk.CTkFont(size=12))
+        self.labela_restore.pack(padx=10, pady=(0, 8))
+
+        # Dugme restore
+        okvir_dugme_r = ctk.CTkFrame(tab)
+        okvir_dugme_r.pack(fill="x", pady=6)
+        self.dugme_restore = ctk.CTkButton(
+            okvir_dugme_r, text="🔄  Pokreni Restore",
+            command=self.pokreni_restore,
+            width=200, height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#1a7a4a", hover_color="#145c38"
+        )
+        self.dugme_restore.pack(side="left", padx=10)
+
+        # Log restore
+        okvir_log_r = ctk.CTkFrame(tab)
+        okvir_log_r.pack(fill="both", expand=True, pady=4)
+        ctk.CTkLabel(okvir_log_r, text="Dnevnik obnavljanja:", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        self.tekst_log_restore = ctk.CTkTextbox(okvir_log_r, height=180)
+        self.tekst_log_restore.pack(padx=10, pady=(0, 10), fill="both", expand=True)
+
+    # ─────────────────────────────────────────────
+    #  BACKUP LOGIKA
+    # ─────────────────────────────────────────────
+    def toggle_raspored(self):
+        if self.raspored_ukljucen.get():
+            self.okvir_raspored_config.pack(fill="x", padx=10, pady=(0, 8))
         else:
-            self.schedule_config_frame.pack_forget()
+            self.okvir_raspored_config.pack_forget()
 
-    def browse_source(self):
-        """Browse for source directory"""
-        directory = filedialog.askdirectory(title="Select Source Directory")
-        if directory:
-            self.source_dir.set(directory)
+    def odaberi_izvor(self):
+        folder = filedialog.askdirectory(title="Izaberite izvorni folder")
+        if folder:
+            self.izvorni_folder.set(folder)
 
-    def browse_destination(self):
-        """Browse for destination directory"""
-        directory = filedialog.askdirectory(title="Select Destination Directory")
-        if directory:
-            self.dest_dir.set(directory)
+    def odaberi_odrediste(self):
+        folder = filedialog.askdirectory(title="Izaberite odredišni folder")
+        if folder:
+            self.odredisni_folder.set(folder)
 
-    def parse_extensions(self, ext_string: str):
-        """Parse comma-separated extension string"""
-        if not ext_string.strip():
+    def parsiraj_ekstenzije(self, tekst: str):
+        if not tekst.strip():
             return []
+        ext = [e.strip() for e in tekst.split(",") if e.strip()]
+        return [e if e.startswith('.') else f'.{e}' for e in ext]
 
-        extensions = [ext.strip() for ext in ext_string.split(",")]
-        # Ensure all extensions start with a dot
-        extensions = [ext if ext.startswith('.') else f'.{ext}' for ext in extensions]
-        return extensions
+    def log(self, poruka: str):
+        self.tekst_log.insert("end", f"{poruka}\n")
+        self.tekst_log.see("end")
 
-    def log(self, message: str):
-        """Add message to log"""
-        self.log_text.insert("end", f"{message}\n")
-        self.log_text.see("end")
-
-    def update_progress(self, current: int, total: int, filename: str):
-        """Update progress bar and label"""
-        progress = current / total if total > 0 else 0
-        self.progress_bar.set(progress)
-        self.progress_label.configure(text=f"Backing up: {filename} ({current}/{total})")
+    def azuriraj_progres(self, trenutno: int, ukupno: int, ime_fajla: str):
+        progres = trenutno / ukupno if ukupno > 0 else 0
+        self.traka_napretka.set(progres)
+        self.labela_napretka.configure(text=f"Kopiranje: {ime_fajla} ({trenutno}/{ukupno})")
         self.root.update_idletasks()
 
-    def perform_backup(self):
-        """Perform backup operation (runs in separate thread)"""
+    def izvrsi_backup(self):
         try:
-            # Get parameters
-            source = self.source_dir.get()
-            destination = self.dest_dir.get()
-            include_ext = self.parse_extensions(self.include_ext.get())
-            exclude_ext = self.parse_extensions(self.exclude_ext.get())
+            izvor = self.izvorni_folder.get()
+            odrediste = self.odredisni_folder.get()
+            ukljuci = self.parsiraj_ekstenzije(self.ukljuci_ext.get())
+            iskljuci = self.parsiraj_ekstenzije(self.iskljuci_ext.get())
 
-            # Validate
-            if not source or not destination:
-                self.log("❌ Error: Please select both source and destination directories")
+            if not izvor or not odrediste:
+                self.log("❌ Greška: Molimo izaberite izvorni i odredišni folder!")
                 return
 
-            # Log start
-            self.log(f"🚀 Starting backup from {source} to {destination}")
-            if include_ext:
-                self.log(f"   Including: {', '.join(include_ext)}")
-            if exclude_ext:
-                self.log(f"   Excluding: {', '.join(exclude_ext)}")
+            self.sacuvaj_trenutna_podesavanja()
 
-            # Perform backup
-            result = self.backup_engine.backup(
-                source_dir=source,
-                destination_dir=destination,
-                include_extensions=include_ext,
-                exclude_extensions=exclude_ext
+            self.log(f"🚀 Pokretanje backup-a: {izvor} → {odrediste}")
+            if ukljuci:
+                self.log(f"   Uključuje: {', '.join(ukljuci)}")
+            if iskljuci:
+                self.log(f"   Isključuje: {', '.join(iskljuci)}")
+
+            rezultat = self.backup_engine.backup(
+                source_dir=izvor,
+                destination_dir=odrediste,
+                include_extensions=ukljuci,
+                exclude_extensions=iskljuci
             )
 
-            # Show result
-            if result["success"]:
-                self.log(f"✅ Backup completed successfully!")
-                self.log(f"   Files copied: {result['copied']}")
-                self.log(f"   Files skipped: {result['skipped']}")
-                self.log(f"   Timestamp: {result['timestamp']}")
-
-                if result.get('errors'):
-                    self.log(f"   Errors: {len(result['errors'])}")
-
-                messagebox.showinfo("Success", f"Backup completed!\n\nCopied: {result['copied']} files\nSkipped: {result['skipped']} files")
+            if rezultat["success"]:
+                self.log(f"✅ Backup završen uspješno!")
+                self.log(f"   Kopirano fajlova: {rezultat['copied']}")
+                self.log(f"   Preskočeno fajlova: {rezultat['skipped']}")
+                self.log(f"   Vreme: {rezultat['timestamp']}")
+                messagebox.showinfo("Uspjeh", f"Backup završen!\n\nKopirano: {rezultat['copied']} fajlova\nPreskočeno: {rezultat['skipped']} fajlova")
             else:
-                self.log(f"❌ Backup failed: {result['error']}")
-                messagebox.showerror("Error", f"Backup failed:\n{result['error']}")
+                self.log(f"❌ Backup nije uspeo: {rezultat['error']}")
+                messagebox.showerror("Greška", f"Backup nije uspeo:\n{rezultat['error']}")
 
         except Exception as e:
-            self.log(f"❌ Exception: {e}")
-            messagebox.showerror("Error", f"An error occurred:\n{e}")
-
+            self.log(f"❌ Izuzetak: {e}")
+            messagebox.showerror("Greška", str(e))
         finally:
-            # Reset UI
-            self.progress_bar.set(0)
-            self.progress_label.configure(text="Ready to backup")
-            self.backup_button.configure(state="normal")
-            self.cancel_button.configure(state="disabled")
+            self.traka_napretka.set(0)
+            self.labela_napretka.configure(text="Spreman za backup")
+            self.dugme_backup.configure(state="normal")
+            self.dugme_otkazivanje.configure(state="disabled")
 
-    def start_backup(self):
-        """Start backup in separate thread"""
-        self.backup_button.configure(state="disabled")
-        self.cancel_button.configure(state="normal")
-
-        self.backup_thread = threading.Thread(target=self.perform_backup, daemon=True)
+    def pokreni_backup(self):
+        self.dugme_backup.configure(state="disabled")
+        self.dugme_otkazivanje.configure(state="normal")
+        self.backup_thread = threading.Thread(target=self.izvrsi_backup, daemon=True)
         self.backup_thread.start()
+        if self.raspored_ukljucen.get():
+            self.postavi_raspored()
 
-        # Setup scheduling if enabled
-        if self.schedule_enabled.get():
-            self.setup_schedule()
-
-    def cancel_backup(self):
-        """Cancel ongoing backup"""
+    def otkazivanje_backup(self):
         self.backup_engine.cancel()
-        self.log("⚠️ Backup cancelled by user")
-        self.cancel_button.configure(state="disabled")
+        self.log("⚠️ Backup otkazan od strane korisnika")
+        self.dugme_otkazivanje.configure(state="disabled")
 
-    def setup_schedule(self):
-        """Setup scheduled backups"""
-        schedule_type = self.schedule_type.get()
-        schedule_time = self.schedule_time.get()
-
-        # Get backup parameters
-        source = self.source_dir.get()
-        destination = self.dest_dir.get()
-        include_ext = self.parse_extensions(self.include_ext.get())
-        exclude_ext = self.parse_extensions(self.exclude_ext.get())
-
-        # Setup schedule
+    def postavi_raspored(self):
         self.scheduler.schedule_backup(
-            schedule_type=schedule_type,
-            time_str=schedule_time,
-            source_dir=source,
-            destination_dir=destination,
-            include_extensions=include_ext,
-            exclude_extensions=exclude_ext
+            schedule_type=self.tip_rasporeda.get(),
+            time_str=self.vreme_rasporeda.get(),
+            source_dir=self.izvorni_folder.get(),
+            destination_dir=self.odredisni_folder.get(),
+            include_extensions=self.parsiraj_ekstenzije(self.ukljuci_ext.get()),
+            exclude_extensions=self.parsiraj_ekstenzije(self.iskljuci_ext.get())
         )
+        self.log(f"⏰ Zakazan {self.tip_rasporeda.get()} backup u {self.vreme_rasporeda.get()}")
 
-        self.log(f"⏰ Scheduled {schedule_type} backup at {schedule_time}")
-
-    def check_scheduler(self):
-        """Check and run pending scheduled tasks"""
+    def provjeri_raspored(self):
         self.scheduler.run_pending()
-        self.root.after(1000, self.check_scheduler)  # Check every second
+        self.root.after(1000, self.provjeri_raspored)
 
-    def run(self):
-        """Start the GUI application"""
+    # ─────────────────────────────────────────────
+    #  RESTORE LOGIKA
+    # ─────────────────────────────────────────────
+    def odaberi_restore_izvor(self):
+        folder = filedialog.askdirectory(title="Izaberite folder sa backup-om")
+        if folder:
+            self.restore_izvor.set(folder)
+
+    def odaberi_restore_odrediste(self):
+        folder = filedialog.askdirectory(title="Izaberite folder za obnavljanje")
+        if folder:
+            self.restore_odrediste.set(folder)
+
+    def log_restore(self, poruka: str):
+        self.tekst_log_restore.insert("end", f"{poruka}\n")
+        self.tekst_log_restore.see("end")
+
+    def azuriraj_progres_restore(self, trenutno: int, ukupno: int, ime_fajla: str):
+        progres = trenutno / ukupno if ukupno > 0 else 0
+        self.traka_restore.set(progres)
+        self.labela_restore.configure(text=f"Obnavljanje: {ime_fajla} ({trenutno}/{ukupno})")
+        self.root.update_idletasks()
+
+    def izvrsi_restore(self):
+        import shutil
+        izvor = self.restore_izvor.get()
+        odrediste = self.restore_odrediste.get()
+        prepisati = self.prepisati_postojece.get()
+
+        if not izvor or not odrediste:
+            self.log_restore("❌ Greška: Molimo izaberite oba foldera!")
+            return
+        if not os.path.exists(izvor):
+            self.log_restore("❌ Greška: Folder sa backup-om ne postoji!")
+            return
+
+        try:
+            os.makedirs(odrediste, exist_ok=True)
+        except Exception as e:
+            self.log_restore(f"❌ Greška pri kreiranju odredišnog foldera: {e}")
+            return
+
+        # Prebroj fajlove
+        ukupno = sum(len(fajlovi) for _, _, fajlovi in os.walk(izvor))
+        if ukupno == 0:
+            self.log_restore("❌ Nema fajlova u backup folderu!")
+            self.dugme_restore.configure(state="normal")
+            return
+
+        kopirano = 0
+        preskoceno = 0
+        greske = []
+
+        self.log_restore(f"🔄 Pokretanje restore-a: {izvor} → {odrediste}")
+        self.log_restore(f"   Ukupno fajlova: {ukupno}")
+
+        for root_dir, dirs, fajlovi in os.walk(izvor):
+            for fajl in fajlovi:
+                src_fajl = os.path.join(root_dir, fajl)
+                rel_putanja = os.path.relpath(src_fajl, izvor)
+                dest_fajl = os.path.join(odrediste, rel_putanja)
+
+                os.makedirs(os.path.dirname(dest_fajl), exist_ok=True)
+
+                if not prepisati and os.path.exists(dest_fajl):
+                    preskoceno += 1
+                    continue
+
+                try:
+                    shutil.copy2(src_fajl, dest_fajl)
+                    kopirano += 1
+                    self.azuriraj_progres_restore(kopirano + preskoceno, ukupno, fajl)
+                except Exception as e:
+                    greske.append(f"{fajl}: {e}")
+                    preskoceno += 1
+
+        self.traka_restore.set(0)
+        self.labela_restore.configure(text="Spreman za obnavljanje")
+        self.dugme_restore.configure(state="normal")
+
+        self.log_restore(f"✅ Restore završen!")
+        self.log_restore(f"   Obnovljeno fajlova: {kopirano}")
+        self.log_restore(f"   Preskočeno: {preskoceno}")
+        if greske:
+            self.log_restore(f"   Greške ({len(greske)}):")
+            for g in greske[:5]:
+                self.log_restore(f"     • {g}")
+
+        messagebox.showinfo("Restore završen", f"Obnavljanje završeno!\n\nObnovljeno: {kopirano} fajlova\nPreskočeno: {preskoceno} fajlova")
+
+    def pokreni_restore(self):
+        odrediste = self.restore_odrediste.get()
+        if odrediste and os.path.exists(odrediste):
+            potvrda = messagebox.askyesno(
+                "Potvrda restore-a",
+                f"Da li ste sigurni da želite da obnovite fajlove u:\n{odrediste}\n\nOvo može prepisati postojeće fajlove!"
+            )
+            if not potvrda:
+                return
+
+        self.dugme_restore.configure(state="disabled")
+        threading.Thread(target=self.izvrsi_restore, daemon=True).start()
+
+    def pokreni(self):
         self.root.mainloop()
 
 
 if __name__ == "__main__":
     app = BackupGUI()
-    app.run()
+    app.pokreni()
